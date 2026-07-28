@@ -1,0 +1,33 @@
+{
+  "deployment": {
+    "input-bucket-name": "your-input-bucket-name-here",
+    "create-input-bucket": true,
+    "output-bucket-name": "your-output-bucket-name-here",
+    "create-output-bucket": true,
+    "bda-project-arn": "arn:aws:bedrock:us-east-1:123456789012:data-automation-project/your-project-id",
+    "bda-stage": "LIVE",
+    "environment": "dev",
+    "region": "us-east-1",
+    "s3-trigger-prefix": "__sfdcroot__/"
+  },
+  "lambda": {
+    "memory-size": 1024,
+    "timeout": 300
+  },
+  "cors": {
+    "allowed-origins": [
+      "https://*.force.com"
+    ]
+  },
+  "features": {
+    "enable-bda": true
+  },
+  "logging": {
+    "s3-log-retention-days": 90,
+    "cloudwatch-log-retention-days": 30
+  },
+  "mcp": {
+    "knowledge-base-id": "KB_ID_PLACE_HOLDER",
+    "enable-semantic-search": false
+  }
+}
