@@ -68,7 +68,24 @@ Feature flags to enable or disable capabilities.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `enable-bda` | `true` | Enable Amazon Bedrock Data Automation processing |
-| `write-sf-metadata` | `true` | Write Salesforce metadata during document processing |
+| `write-sf-metadata` | `false` | Write a `.metadata.json` sidecar file alongside each input document in S3 |
+
+#### About `write-sf-metadata`
+
+When enabled, the ingestion Lambda writes a `{filename}.metadata.json` file next to the uploaded document in the input bucket. This file contains Salesforce record metadata extracted from the S3 path or object metadata:
+
+```json
+{
+  "metadataAttributes": {
+    "salesforce_object_id": "5001a00000ABC123",
+    "salesforce_object_type": "Case"
+  }
+}
+```
+
+This sidecar file is used by Amazon Bedrock Knowledge Bases as a [metadata attributes file](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-ds-s3.html). When the Knowledge Base ingests your S3 data, it picks up these attributes and attaches them to the corresponding document vectors. This enables the `semantic_search` MCP tool to filter results by Salesforce record — for example, returning only documents linked to a specific Case ID.
+
+If you are not using semantic search or do not need per-record filtering, you can safely leave this as `false` (the default). Set it to `true` when you enable semantic search and want to filter results by Salesforce record.
 
 ### `logging` (optional)
 
@@ -196,6 +213,53 @@ Only files matching these extensions will trigger BDA processing when uploaded t
   }
 }
 ```
+
+---
+
+## Enabling Semantic Search (Optional)
+
+The `semantic_search` MCP tool allows Agentforce to perform natural language queries against your processed documents using vector similarity. This is powered by an Amazon Bedrock Knowledge Base that you create and point at your output data.
+
+### Step 1: Create an Amazon Bedrock Knowledge Base
+
+1. Open the [Amazon Bedrock console](https://console.aws.amazon.com/bedrock/) in the same region as your deployment
+2. Navigate to **Knowledge bases** → **Create knowledge base**
+3. Give it a name (e.g., `evidence-kb-dev`) and create or select an IAM service role
+4. For the data source, choose **Amazon S3** and point it to your **output bucket** (the bucket where BDA writes processed results)
+5. Choose an embeddings model (e.g., Amazon Titan Embeddings V2)
+6. Select a vector store — for quick setup, let Bedrock create an OpenSearch Serverless collection for you
+7. Complete the wizard and wait for the Knowledge Base to become active
+
+### Step 2: Sync the Data Source
+
+After creating the Knowledge Base:
+
+1. Select your Knowledge Base in the console
+2. Under **Data source**, choose **Sync** to ingest the documents from your output bucket
+3. Wait for the sync to complete — you can monitor progress in the console
+
+> You will need to re-sync whenever new documents are processed by BDA. You can automate this with an EventBridge rule or run it on a schedule.
+
+### Step 3: Update Your CDK Configuration
+
+Copy the Knowledge Base ID from the console (found on the Knowledge Base detail page) and update `cdk.context.json`:
+
+```json
+{
+  "mcp": {
+    "knowledge-base-id": "YOUR_KNOWLEDGE_BASE_ID",
+    "enable-semantic-search": true
+  }
+}
+```
+
+### Step 4: Redeploy
+
+```bash
+cdk deploy McpGatewayStack-dev
+```
+
+After redeployment, the `semantic_search` tool will be registered with the AgentCore Gateway and available to Agentforce. Users can ask questions like *"Find documents mentioning the suspect's vehicle"* and get results ranked by semantic relevance.
 
 ---
 

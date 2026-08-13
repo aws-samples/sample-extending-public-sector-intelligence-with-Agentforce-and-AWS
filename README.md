@@ -260,48 +260,47 @@ See [cdk/README.md](cdk/README.md) for the complete reference.
 
 ### Destroy the CDK Stacks
 
+When you no longer need this sample, use `cdk destroy` to tear down the deployed infrastructure. This deletes the CloudFormation stacks and all resources managed by them (Lambda functions, IAM roles, EventBridge rules, Step Functions, etc.). Stateful resources with `RETAIN` removal policies (S3 buckets, DynamoDB tables, Cognito user pools) are preserved and must be removed separately — see [Retained Resources](#retained-resources) below.
+
 ```bash
 cd cdk
 cdk destroy BdaProcessingStack-dev McpGatewayStack-dev
 ```
 
+Alternatively, you can delete the stacks directly from the AWS Console:
+
+1. Open the [CloudFormation console](https://console.aws.amazon.com/cloudformation/)
+2. Select the `McpGatewayStack-dev` stack and choose **Delete**
+3. Wait for deletion to complete, then repeat for `BdaProcessingStack-dev`
+
+> Delete `McpGatewayStack-dev` first since it depends on resources in `BdaProcessingStack-dev`.
+
 ### Retained Resources
 
-The stacks use `RETAIN` removal policies on stateful resources. After `cdk destroy`, manually delete if no longer needed:
+The stacks use `RETAIN` removal policies on stateful resources. After `cdk destroy`, manually delete these via the AWS Console if no longer needed:
 
 **S3 Buckets:**
-```bash
-aws s3 rm s3://YOUR-INPUT-BUCKET --recursive
-aws s3api delete-bucket --bucket YOUR-INPUT-BUCKET
-
-aws s3 rm s3://YOUR-OUTPUT-BUCKET --recursive
-aws s3api delete-bucket --bucket YOUR-OUTPUT-BUCKET
-
-aws s3 rm s3://YOUR-INPUT-BUCKET-dev-logs --recursive
-aws s3api delete-bucket --bucket YOUR-INPUT-BUCKET-dev-logs
-```
+1. Open the [Amazon S3 console](https://console.aws.amazon.com/s3/)
+2. Select each of the following buckets: your input bucket, output bucket, and the access logging bucket (named `YOUR-INPUT-BUCKET-dev-logs`)
+3. Choose **Empty** to remove all objects, then choose **Delete** to remove the bucket itself
 
 **DynamoDB Tables:**
-```bash
-aws dynamodb delete-table --table-name YOUR-INPUT-BUCKET-dev-documents
-aws dynamodb delete-table --table-name YOUR-INPUT-BUCKET-dev-counters
-```
+1. Open the [DynamoDB console](https://console.aws.amazon.com/dynamodb/)
+2. Navigate to **Tables** and delete: `YOUR-INPUT-BUCKET-dev-documents` and `YOUR-INPUT-BUCKET-dev-counters`
 
 **Cognito User Pool:**
-```bash
-aws cognito-idp list-user-pools --max-results 20
-aws cognito-idp delete-user-pool --user-pool-id YOUR-USER-POOL-ID
-```
+1. Open the [Amazon Cognito console](https://console.aws.amazon.com/cognito/)
+2. Navigate to **User Pools**, select the pool created by the stack, and choose **Delete**
 
 **CloudWatch Log Groups:**
-```bash
-aws logs delete-log-group --log-group-name /aws/lambda/InvokeBDAProject-dev
-aws logs delete-log-group --log-group-name /aws/lambda/BDAEventProcessor-dev
-aws logs delete-log-group --log-group-name /aws/lambda/McpTools-dev
-aws logs delete-log-group --log-group-name /aws/lambda/SfdcQueryProcessor-dev
-aws logs delete-log-group --log-group-name /aws/lambda/SfdcDocProcessor-dev
-aws logs delete-log-group --log-group-name /aws/stepfunctions/SfdcQuery-dev
-```
+1. Open the [CloudWatch console](https://console.aws.amazon.com/cloudwatch/)
+2. Navigate to **Logs > Log groups** and delete the following:
+   - `/aws/lambda/InvokeBDAProject-dev`
+   - `/aws/lambda/BDAEventProcessor-dev`
+   - `/aws/lambda/McpTools-dev`
+   - `/aws/lambda/SfdcQueryProcessor-dev`
+   - `/aws/lambda/SfdcDocProcessor-dev`
+   - `/aws/stepfunctions/SfdcQuery-dev`
 
 **Salesforce:** Remove the Agentforce MCP connection from **Setup > Agentforce Registry**.
 
@@ -310,6 +309,8 @@ aws logs delete-log-group --log-group-name /aws/stepfunctions/SfdcQuery-dev
 ---
 
 ## Cost Considerations
+
+This sample uses a fully serverless architecture, so there are no always-on instances or fixed hourly charges. Costs are driven almost entirely by usage — you pay only when evidence is uploaded, processed, or queried. When the system is idle, ongoing costs are limited to S3 storage for any retained objects.
 
 | Service | Cost Driver |
 |---------|------------|

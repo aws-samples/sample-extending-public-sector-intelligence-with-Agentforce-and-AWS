@@ -116,7 +116,7 @@ def lambda_handler(event, context):
         
         # Write metadata.json alongside the input file immediately
         # (no need to wait for BDA to complete — all Salesforce metadata is available now)
-        write_sf_metadata = os.environ.get('WRITE_SF_METADATA', 'true').lower() == 'true'
+        write_sf_metadata = os.environ.get('WRITE_SF_METADATA', 'false').lower() == 'true'
         if write_sf_metadata and (salesforce_object_type or salesforce_object_id):
             try:
                 sf_metadata = {

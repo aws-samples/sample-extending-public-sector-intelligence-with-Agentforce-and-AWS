@@ -407,7 +407,7 @@ def lambda_handler(event, context):
                     logger.info(f"Updated document {doc_id} with {len(output_file_keys)} result.json files in bucket {bucket_name}")
 
                     # Write metadata sidecar files alongside each result.json for KB metadata filtering
-                    write_sf_metadata = os.environ.get('WRITE_SF_METADATA', 'true').lower() == 'true'
+                    write_sf_metadata = os.environ.get('WRITE_SF_METADATA', 'false').lower() == 'true'
                     salesforce_object_id = document.get('salesforce_object_id', '')
                     salesforce_object_type = document.get('salesforce_object_type', '')
                     if write_sf_metadata and (salesforce_object_id or salesforce_object_type):

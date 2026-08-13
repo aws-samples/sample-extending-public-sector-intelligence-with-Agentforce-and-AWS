@@ -66,7 +66,7 @@ LAMBDA_TIMEOUT = lambda_config.get("timeout", 300)
 
 # Feature flags from context
 features_config = app.node.try_get_context("features") or {}
-WRITE_SF_METADATA = features_config.get("write-sf-metadata", True)
+WRITE_SF_METADATA = features_config.get("write-sf-metadata", False)
 ENABLE_BDA = features_config.get("enable-bda", True)
 
 # Define the environment

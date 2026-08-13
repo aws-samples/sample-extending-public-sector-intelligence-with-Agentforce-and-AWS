@@ -20,7 +20,8 @@
     ]
   },
   "features": {
-    "enable-bda": true
+    "enable-bda": true,
+    "write-sf-metadata": false
   },
   "logging": {
     "s3-log-retention-days": 90,

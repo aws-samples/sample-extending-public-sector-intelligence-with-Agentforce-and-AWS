@@ -30,7 +30,7 @@ class BdaProcessingStack(Stack):
                  s3_trigger_prefix: str = "__sfdcroot__/",
                  output_bucket_name: str = "",
                  create_output_bucket: bool = False,
-                 write_sf_metadata: bool = True,
+                 write_sf_metadata: bool = False,
                  enable_bda: bool = True,
                  **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
