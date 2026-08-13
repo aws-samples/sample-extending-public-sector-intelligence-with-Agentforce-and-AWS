@@ -114,18 +114,20 @@ pip install -r requirements.txt
 cp cdk.context.example.json cdk.context.json
 ```
 
-Open `cdk.context.json` and fill in the **required** values:
+Open `cdk.context.json` and fill in the **required** values for your environment:
 
 ```json
 {
   "deployment": {
-    "input-bucket-name": "my-org-evidence-input",
+    "input-bucket-name": "your-input-bucket-name-here",
     "create-input-bucket": true,
-    "output-bucket-name": "my-org-evidence-output",
+    "output-bucket-name": "your-output-bucket-name-here",
     "create-output-bucket": true,
-    "bda-project-arn": "arn:aws:bedrock:us-east-1:123456789012:data-automation-project/YOUR-PROJECT-ID",
+    "bda-project-arn": "arn:aws:bedrock:us-east-1:123456789012:data-automation-project/your-project-id",
+    "bda-stage": "LIVE",
     "environment": "dev",
-    "region": "us-east-1"
+    "region": "us-east-1",
+    "s3-trigger-prefix": "__sfdcroot__/"
   }
 }
 ```
@@ -137,7 +139,7 @@ Open `cdk.context.json` and fill in the **required** values:
 | `bda-project-arn` | AWS Console → Amazon Bedrock → Data Automation → Your Project → ARN |
 | `region` | The region where your BDA project lives |
 
-> **Bucket creation notes:** `create-input-bucket` and `create-output-bucket` default to `true`, meaning CDK will create new buckets with all required policies, encryption, and CORS configured automatically. The bucket names you provide must be globally unique across all AWS accounts. If you set either to `false`, you are referencing an existing bucket — CDK will not modify its policies or CORS. You will need to manually configure CORS permissions and ensure the Lambda roles have the required S3 access. See [cdk/deployment-config.md](cdk/deployment-config.md) for details.
+> **Bucket creation notes:** `create-input-bucket` and `create-output-bucket` default to `true`, meaning CDK will create new buckets with all required policies, encryption, and CORS configured automatically. The bucket names you provide must be globally unique across all AWS accounts. If you set either to `false`, you are referencing an existing bucket — CDK will not modify its policies or CORS. You will need to manually configure CORS permissions and ensure the Lambda roles have the required S3 access. See [cdk/README.md](cdk/README.md) for details on bucket creation behavior.
 
 For the full configuration reference (optional fields, feature flags, MCP settings), see [cdk/README.md](cdk/README.md).
 
@@ -188,77 +190,11 @@ You also need the **Cognito client secret**:
 
 ## Connect Agentforce to the MCP Endpoint
 
-With the AWS stack deployed and credentials in hand, register the MCP server in Salesforce.
-
-### Step 9: Create MCP Connection in Salesforce
-
-1. In Salesforce Setup, search for **Agentforce Registry** in Quick Find
-2. Choose **New** → **Register MCP Server**
-3. Enter the values from Step 8:
-   - **MCP Endpoint URL** → `GatewayMcpEndpoint`
-   - **Token Endpoint** → `CognitoTokenEndpoint`
-   - **Client ID** → `CognitoClientId`
-   - **Client Secret** → the secret retrieved from the Cognito console
-4. Choose **Create and Continue**
-5. When prompted for the **MCP Server Allowlist**, choose **Select All**
-6. Choose **Save**
-
-### Step 10: Configure an Agentforce Subagent
-
-Create a subagent dedicated to evidence retrieval:
-
-1. In **Agentforce Builder**, create a new agent or select an existing one
-2. Create a **New Subagent** with:
-   - **Name**: `Media Processor`
-   - **Description**: `Subagent that handles all questions related to files, documents, photos, images, videos, or audio attached to the current case. Retrieves AI-generated insights from processed media and responds in natural language.`
-3. Under **Actions Available For Reasoning**, select the MCP connection created in Step 9
-4. In **Reasoning Instructions**, add:
-   > Handle all questions about files, documents, photos, images, videos, or audio attached to the current case. Run @[Your MCP Action] to retrieve processed insights. If no insights are available, inform the user the attachment has not yet been processed. Do not fabricate content about unprocessed files.
-5. Replace `@[Your MCP Action]` by typing `@` and selecting the MCP resource associated with this subagent
-6. Choose **Save**
-
-### Step 11: Test and Validate
-
-1. In Agentforce Builder, open the **Preview** panel
-2. Set **Context Variables** → assign `currentRecordId` to a case ID with processed evidence
-3. Choose **Apply and Restart Session**
-4. Enter a question such as *"Summarize the files for this case"*
-5. Verify the agent returns summaries of evidence associated with the case
+For step-by-step instructions on registering the MCP server in Salesforce, configuring an Agentforce subagent, and testing the integration, refer to the accompanying blog post: [Extending Public Sector Intelligence with Agentforce and AWS](https://aws.amazon.com/blogs/publicsector/) *(link will be updated when the blog is published)*.
 
 ---
 
-## Extend This Pattern
-
-This architecture is not limited to evidence management. The same modular pattern applies to any workflow involving unstructured data:
-
-- **Permits and compliance reviews** — Extract fields and summaries from submitted documents
-- **Benefits claims and tax forms** — Classify documents and validate extracted data
-- **Loan applications** — Process supporting documentation and surface key details to case workers
-
-You can also integrate the open source [GenAI IDP Accelerator](https://github.com/aws-samples/genai-idp-accelerator) into the processing pipeline for intelligent document processing with classification, structured extraction, validation, and human-in-the-loop review.
-
-The MCP query path remains the same regardless of processing approach — AgentCore Gateway exposes your processed data as tools that any MCP-compatible agent can discover and invoke.
-
----
-
-## Configuration Reference
-
-| Section | Purpose |
-|---------|---------|
-| `deployment` | Bucket names, BDA project ARN, region, environment |
-| `lambda` | Memory and timeout sizing |
-| `cors` | Allowed origins for S3 CORS |
-| `features` | Feature flags (`enable-bda`, `write-sf-metadata`) |
-| `logging` | Log retention periods |
-| `mcp` | Knowledge Base ID, semantic search toggle |
-
-See [cdk/README.md](cdk/README.md) for the complete reference.
-
----
-
-## Clean Up
-
-### Destroy the CDK Stacks
+## Clean Up the CDK Stacks
 
 When you no longer need this sample, use `cdk destroy` to tear down the deployed infrastructure. This deletes the CloudFormation stacks and all resources managed by them (Lambda functions, IAM roles, EventBridge rules, Step Functions, etc.). Stateful resources with `RETAIN` removal policies (S3 buckets, DynamoDB tables, Cognito user pools) are preserved and must be removed separately — see [Retained Resources](#retained-resources) below.
 
