@@ -36,6 +36,11 @@ CREATE_BUCKET = deployment_config.get("create-input-bucket", True)
 S3_TRIGGER_PREFIX = deployment_config.get("s3-trigger-prefix", "__sfdcroot__/")
 OUTPUT_BUCKET_NAME = deployment_config.get("output-bucket-name", "")
 CREATE_OUTPUT_BUCKET = deployment_config.get("create-output-bucket", False)
+DYNAMODB_TABLE_NAME = deployment_config.get("dynamodb-table-name", f"{BUCKET_NAME}-{ENVIRONMENT}-documents")
+DYNAMODB_COUNTER_TABLE_NAME = deployment_config.get("dynamodb-counter-table-name", f"{BUCKET_NAME}-{ENVIRONMENT}-counters")
+# Removal policy for stateful resources (S3 buckets, DynamoDB tables).
+# "retain" (default) preserves data on stack deletion; "destroy" deletes it.
+REMOVAL_POLICY = deployment_config.get("removal-policy", "retain")
 
 if not BUCKET_NAME:
     raise ValueError("Required 'deployment.input-bucket-name' not found in cdk.context.json")
@@ -89,13 +94,15 @@ main_stack = BdaProcessingStack(app, main_stack_id,
                            enable_bda=ENABLE_BDA,
                            lambda_memory_size=LAMBDA_MEMORY_SIZE,
                            lambda_timeout=LAMBDA_TIMEOUT,
+                           dynamodb_table_name=DYNAMODB_TABLE_NAME,
+                           dynamodb_counter_table_name=DYNAMODB_COUNTER_TABLE_NAME,
+                           removal_policy=REMOVAL_POLICY,
                            env=env)
 
 # Deploy the MCP Gateway stack (deploy separately with: cdk deploy McpGatewayStack-{env})
 mcp_config = app.node.try_get_context("mcp") or {}
 MCP_KNOWLEDGE_BASE_ID = mcp_config.get("knowledge-base-id", "")
 MCP_ENABLE_SEMANTIC_SEARCH = mcp_config.get("enable-semantic-search", False)
-MCP_DYNAMODB_TABLE_NAME = mcp_config.get("dynamodb-table-name", f"{BUCKET_NAME}-{ENVIRONMENT}-documents")
 
 MCP_OUTPUT_BUCKET_NAME = deployment_config.get("output-bucket-name", "")
 
@@ -103,7 +110,7 @@ mcp_stack_id = f"McpGatewayStack-{ENVIRONMENT}"
 mcp_stack = McpGatewayStack(app, mcp_stack_id,
                             knowledge_base_id=MCP_KNOWLEDGE_BASE_ID,
                             enable_semantic_search=MCP_ENABLE_SEMANTIC_SEARCH,
-                            dynamodb_table_name=MCP_DYNAMODB_TABLE_NAME,
+                            dynamodb_table_name=DYNAMODB_TABLE_NAME,
                             output_bucket_name=MCP_OUTPUT_BUCKET_NAME,
                             environment=ENVIRONMENT,
                             env=env)

@@ -38,11 +38,15 @@ Core infrastructure parameters for the BdaProcessingStack.
 - CDK will **not** modify the existing bucket's policies, encryption settings, or CORS configuration.
 - If the existing bucket has custom bucket policies, they may conflict with the permissions the Lambda functions need. You may need to manually grant `s3:GetObject`, `s3:PutObject`, and `s3:ListBucket` to the Lambda execution roles.
 - CORS permissions required for Salesforce integration (`PUT`, `GET`, `HEAD` from your `*.force.com` origin) must be configured manually on the existing bucket.
+
+> If a deploy fails with `resource ... already exists`, the named bucket was retained from a previous deploy or created out-of-band. Setting these flags to `false` is one way to reference it instead of recreating it — see [Troubleshooting Deployment](#troubleshooting-deployment).
+
 | `bda-project-arn` | Yes* | — | Amazon Bedrock Data Automation project ARN (*required when `enable-bda` is true) |
 | `bda-stage` | No | `LIVE` | `LIVE` or `DRAFT` |
-| `environment` | No | `dev` | `dev`, `staging`, or `prod` — controls retention policies and log levels |
+| `environment` | No | `dev` | `dev`, `staging`, or `prod` — controls log retention and log levels |
 | `region` | No | `us-east-1` | AWS region for deployment |
 | `s3-trigger-prefix` | No | `__sfdcroot__/` | S3 key prefix that triggers BDA processing on upload |
+| `removal-policy` | No | `retain` | Removal policy for S3 buckets and DynamoDB tables: `retain` (keep data on stack deletion) or `destroy` (delete them). See [Removal Policy](#removal-policy). |
 
 ### `lambda` (optional)
 
@@ -89,12 +93,14 @@ If you are not using semantic search or do not need per-record filtering, you ca
 
 ### `logging` (optional)
 
-Log retention configuration.
+Reserved for log-retention configuration.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `s3-log-retention-days` | `90` | Days to retain S3 access logs |
-| `cloudwatch-log-retention-days` | `30` | Days to retain CloudWatch logs |
+| `s3-log-retention-days` | `90` | Intended days to retain S3 access logs |
+| `cloudwatch-log-retention-days` | `30` | Intended days to retain CloudWatch logs |
+
+> ⚠️ **Not currently wired.** These keys are **not read by the stack today** — log retention is fixed by `environment` (see [Retention Policies](#retention-policies)). The keys are documented here as the intended configuration surface; setting them has no effect until the stack is updated to consume them.
 
 ### `mcp` (optional — for McpGatewayStack)
 
@@ -144,16 +150,88 @@ Only files matching these extensions will trigger BDA processing when uploaded t
 ## Environment-Specific Behavior
 
 ### Development (`environment: "dev"`)
-- **Retention Policy**: RETAIN (resources preserved on stack deletion)
 - **CloudWatch Log Retention**: 1 week
 - **Debug Logging**: Enabled
 - **S3 Log Lifecycle**: Deleted after 30 days
 
 ### Production (`environment: "prod"`)
-- **Retention Policy**: RETAIN (resources preserved on stack deletion)
 - **CloudWatch Log Retention**: 1 month
 - **Debug Logging**: Disabled
 - **S3 Log Lifecycle**: Transitioned to IA after 30 days, deleted after 90 days
+
+> The removal policy for stateful resources (S3 buckets and DynamoDB tables) is controlled by [`deployment.removal-policy`](#removal-policy), not by `environment`. It defaults to `retain` in every environment.
+
+---
+
+## Removal Policy
+
+The `deployment.removal-policy` context value controls what happens to the **S3 buckets and DynamoDB tables** (input bucket, output bucket, logging bucket, document table, counter table) when the stack is deleted. It applies to all environments and defaults to `retain`.
+
+| Value | Behavior |
+|-------|----------|
+| `retain` (default) | Buckets and tables are **preserved** on stack deletion. Data is never lost to a `cdk destroy`. |
+| `destroy` | Buckets and tables are **deleted** on stack deletion. Created buckets also get `auto_delete_objects` enabled so non-empty buckets can be removed. |
+
+```json
+"deployment": {
+  "removal-policy": "destroy"
+}
+```
+
+**When to use `destroy`**
+
+Use it for disposable, non-production environments (ephemeral dev/test, CI, demos) where you want `cdk destroy` to clean up everything and leave nothing behind. This also avoids the retained-resource collisions described in [Troubleshooting Deployment](#troubleshooting-deployment).
+
+> ⚠️ **Data-loss warning.** With `destroy`, deleting the stack permanently deletes the buckets (and all objects, including versioned copies) and the DynamoDB tables (and their point-in-time-recovery history). This system is designed to handle regulated case data, so **keep `retain` for staging and production.** Only set `destroy` in environments where losing the stored data on teardown is acceptable and approved. Note that `destroy` only takes effect on a future stack deletion — it does not delete anything on a normal `cdk deploy`.
+
+**Notes**
+
+- This setting applies only to resources created by this stack. Buckets referenced via `create-input-bucket: false` / `create-output-bucket: false` are not affected.
+- CloudWatch log groups already use a `destroy` policy independently of this setting.
+
+---
+
+## Retention Policies
+
+"Retention" here means **how long data and logs are kept while the stack is running** — distinct from the [Removal Policy](#removal-policy), which governs what happens to stateful resources when the stack is *deleted*. The retention behaviors below are currently **fixed by `environment`** and are not yet driven by the [`logging`](#logging-optional) context keys.
+
+### CloudWatch Logs (Lambda)
+
+Log groups for the Lambda functions (`InvokeBDAFunction`, `BDAEventProcessorFunction`) have a fixed retention:
+
+| Environment | Retention |
+|-------------|-----------|
+| `dev` | 1 week |
+| `prod` (and any non-`dev`) | 1 month |
+
+The log groups themselves use a `destroy` removal policy, so they are deleted when the stack is deleted (the log *events* also expire per the retention above).
+
+### S3 Access Logs (logging bucket)
+
+The logging bucket (`{input-bucket-name}-{environment}-logs`) stores S3 server access logs for the input and output buckets. Its lifecycle is fixed by `environment`:
+
+| Environment | Lifecycle |
+|-------------|-----------|
+| `dev` | Objects expire (deleted) after **30 days**; no storage-class transition |
+| `prod` (and any non-`dev`) | Transition to S3 Infrequent Access after **30 days**, then expire after **90 days** |
+
+The logging bucket is not versioned. Its own removal-on-stack-deletion behavior follows the [Removal Policy](#removal-policy).
+
+### DynamoDB Point-in-Time Recovery (PITR)
+
+Both DynamoDB tables (`DocumentTable`, `CounterTable`) have **PITR enabled**. PITR provides continuous backups with a rolling **35-day** recovery window (an AWS-fixed value), allowing restore to any second within that window. PITR is always on and is not configurable via context.
+
+> **Security/compliance note.** Because this system is designed for regulated case data, PITR (35 days) and S3 versioning mean sensitive data persists in recovery history and prior object versions even after a logical delete. Account for these windows in data-retention and purge planning. This is tracked in the threat model as a data-lifecycle finding.
+
+### Summary
+
+| Data / logs | Retention | Configurable? |
+|-------------|-----------|---------------|
+| Lambda CloudWatch logs | 1 week (dev) / 1 month (prod) | Fixed by `environment` (see [`logging`](#logging-optional) caveat) |
+| S3 access logs | 30 days (dev) / IA@30d + 90d (prod) | Fixed by `environment` |
+| DynamoDB PITR | 35-day rolling window | Always on (AWS-fixed) |
+| S3 object versions | Kept indefinitely (versioning on) | Not configurable |
+| Stateful resources on stack deletion | Retained or destroyed | [`removal-policy`](#removal-policy) |
 
 ---
 
@@ -270,6 +348,58 @@ The stack automatically validates at deploy time:
 - `bda-project-arn` is a valid `arn:aws:bedrock:` ARN (when `enable-bda` is true)
 - All `processed-file-types` start with a dot (e.g., `.pdf`)
 - At least one file type is configured for processing
+
+---
+
+## Troubleshooting Deployment
+
+### Error: "resource ... already exists" on deploy
+
+When you run `cdk deploy`, the change set fails early validation with one or more messages stating that a resource of type `AWS::S3::Bucket` or `AWS::DynamoDB::Table` with a given identifier **already exists** (referencing the `DocumentBucket`, `OutputBucket`, `LoggingBucket`, `DocumentTable`, or `CounterTable` resources).
+
+**Why this happens**
+
+These resources are created with **fixed physical names** (from `input-bucket-name`, `output-bucket-name`, `dynamodb-table-name`, and the derived `-logs` / `-counters` names) and use a `retain` [removal policy](#removal-policy) by default. Retain means that when the stack is deleted, the buckets and DynamoDB tables are **kept**, not destroyed. On the next deploy, CloudFormation tries to *create* them again, but a resource with that exact name already exists — so it refuses. The same error occurs if the resource was created outside this stack (for example, manually or by another stack).
+
+**Which resources are affected**
+
+| Resource | Has a create/reference toggle? |
+|----------|-------------------------------|
+| Input bucket (`DocumentBucket`) | Yes — `create-input-bucket` |
+| Output bucket (`OutputBucket`) | Yes — `create-output-bucket` |
+| Logging bucket (`LoggingBucket`) | **No** — always created (known limitation) |
+| Document table (`DocumentTable`) | **No** — always created (known limitation) |
+| Counter table (`CounterTable`) | **No** — always created (known limitation) |
+
+**How to resolve**
+
+Choose the option that matches your situation:
+
+1. **The resources are leftovers from a previous deploy of this same stack (most common).**
+   Adopt them back into the stack instead of recreating them, using CloudFormation resource import:
+   ```bash
+   cdk import BdaProcessingStack-dev --profile <your-profile>
+   ```
+   `cdk import` matches each existing physical resource to its logical ID in the template and brings it under management, preserving all data. Keep the resource names in `cdk.context.json` unchanged so they match the existing resources.
+
+2. **The buckets already exist and you want to reference them (not manage them).**
+   Set the bucket toggles in `cdk.context.json` so the stack references the existing buckets instead of creating them:
+   ```json
+   "deployment": {
+     "create-input-bucket": false,
+     "create-output-bucket": false
+   }
+   ```
+   Note: referenced buckets are **not** configured by CDK — encryption, CORS, the SSL-enforcement bucket policy, lifecycle rules, and access logging must already be set on the existing bucket (see [Bucket Creation Behavior](#bucket-creation-behavior)). There is currently no equivalent toggle for the logging bucket or the DynamoDB tables, so options 1 or 3 apply to those.
+
+3. **The resources are stale and safe to remove.**
+   Delete the leftover buckets and tables, then redeploy so CDK recreates and manages them.
+
+   > ⚠️ **Data-loss warning.** These resources are retained on purpose and may contain regulated case data, versioned S3 objects, and DynamoDB point-in-time-recovery history. Confirm each resource is empty or backed up before deleting. Deletion is irreversible. Do not do this in a production account without an approved change.
+
+**Preventing this class of error**
+
+If predictable names are not a hard requirement, you can stop hardcoding physical names and let CloudFormation generate unique ones (remove `bucket_name` / `table_name`). Collisions then become impossible. If you do this, pass the generated DynamoDB table name to `McpGatewayStack` as a stack reference (for example via a `CfnOutput` or SSM parameter) instead of the hardcoded `dynamodb-table-name` value.
 
 ---
 

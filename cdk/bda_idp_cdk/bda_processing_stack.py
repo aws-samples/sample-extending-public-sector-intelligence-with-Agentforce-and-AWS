@@ -32,13 +32,27 @@ class BdaProcessingStack(Stack):
                  create_output_bucket: bool = False,
                  write_sf_metadata: bool = False,
                  enable_bda: bool = True,
+                 dynamodb_table_name: str = "",
+                 dynamodb_counter_table_name: str = "",
+                 removal_policy: str = "retain",
                  **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         self.aws_account = self.account
         self.aws_region = self.region
         
-        # Environment-based retention policy
-        retention_policy = RemovalPolicy.RETAIN
+        # Removal policy for stateful resources (S3 buckets, DynamoDB tables).
+        # Controlled via deployment.removal-policy context; defaults to RETAIN so
+        # data is preserved on stack deletion. Set to "destroy" only for
+        # disposable environments where data loss on teardown is acceptable.
+        if str(removal_policy).strip().lower() == "destroy":
+            retention_policy = RemovalPolicy.DESTROY
+        else:
+            retention_policy = RemovalPolicy.RETAIN
+
+        # When destroying, S3 buckets must be emptied first or deletion fails on
+        # non-empty buckets; auto_delete_objects wires a custom resource to do so.
+        # Only enabled with DESTROY (it requires removal_policy=DESTROY).
+        auto_delete_objects = retention_policy == RemovalPolicy.DESTROY
         
         # Common resource tags for cost tracking and management
         common_tags = {
@@ -142,6 +156,7 @@ class BdaProcessingStack(Stack):
             bucket_name=f"{bucket_name}-{environment}-logs",
             versioned=False,
             removal_policy=retention_policy,
+            auto_delete_objects=auto_delete_objects,
             enforce_ssl=True,
             encryption=s3.BucketEncryption.S3_MANAGED,
             lifecycle_rules=lifecycle_rules,
@@ -158,6 +173,7 @@ class BdaProcessingStack(Stack):
                 bucket_name=bucket_name,
                 versioned=True,
                 removal_policy=retention_policy,
+                auto_delete_objects=auto_delete_objects,
                 enforce_ssl=True,
                 encryption=s3.BucketEncryption.S3_MANAGED,
                 block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
@@ -211,6 +227,7 @@ class BdaProcessingStack(Stack):
                     bucket_name=output_bucket_name,
                     versioned=True,
                     removal_policy=retention_policy,
+                    auto_delete_objects=auto_delete_objects,
                     enforce_ssl=True,
                     encryption=s3.BucketEncryption.S3_MANAGED,
                     server_access_logs_bucket=logging_bucket,
@@ -227,7 +244,7 @@ class BdaProcessingStack(Stack):
 
         # Create DynamoDB table for document tracking
         document_table = dynamodb.Table(self, "DocumentTable",
-            table_name=f"{bucket_name}-{environment}-documents",
+            table_name=dynamodb_table_name or f"{bucket_name}-{environment}-documents",
             partition_key=dynamodb.Attribute(name="document_id", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=retention_policy,
@@ -256,7 +273,7 @@ class BdaProcessingStack(Stack):
 
         # Create counter table for document ID generation
         counter_table = dynamodb.Table(self, "CounterTable",
-            table_name=f"{bucket_name}-{environment}-counters",
+            table_name=dynamodb_counter_table_name or f"{bucket_name}-{environment}-counters",
             partition_key=dynamodb.Attribute(name="counter_name", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=retention_policy,

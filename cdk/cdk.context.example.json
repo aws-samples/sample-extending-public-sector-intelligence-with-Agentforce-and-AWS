@@ -8,7 +8,10 @@
     "bda-stage": "LIVE",
     "environment": "dev",
     "region": "us-east-1",
-    "s3-trigger-prefix": "__sfdcroot__/"
+    "s3-trigger-prefix": "__sfdcroot__/",
+    "dynamodb-table-name": "sample-bda-documents",
+    "dynamodb-counter-table-name": "sample-bda-counters",
+    "removal-policy": "destroy"
   },
   "lambda": {
     "memory-size": 1024,

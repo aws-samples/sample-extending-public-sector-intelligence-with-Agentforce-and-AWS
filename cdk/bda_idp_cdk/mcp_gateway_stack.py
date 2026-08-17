@@ -4,7 +4,7 @@ import os
 import json
 import aws_cdk as cdk
 from constructs import Construct
-import aws_cdk.aws_bedrock_agentcore_alpha as agentcore
+import aws_cdk.aws_bedrockagentcore as agentcore
 import aws_cdk.aws_cognito as cognito
 import aws_cdk.aws_iam as iam
 import aws_cdk.aws_lambda as lambda_
