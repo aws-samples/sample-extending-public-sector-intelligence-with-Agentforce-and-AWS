@@ -148,6 +148,8 @@ PROCESSED_FILE_TYPES = [".pdf", ".png", ".mp4"]
 
 Only files matching these extensions will trigger BDA processing when uploaded to the S3 trigger prefix path. Other files are stored but not processed.
 
+> **Triggering is not the same as BDA acceptance.** This list controls what *invokes* the pipeline; Bedrock Data Automation then enforces its own per-modality limits on file size, resolution/length, and supported formats. A triggered file can still be rejected by BDA at invoke time with a `ValidationException`. Review the current limits before choosing which extensions to process — see [Prerequisites and limits for Bedrock Data Automation](https://docs.aws.amazon.com/bedrock/latest/userguide/bda-limits.html) and the [BDA File Limits](../README.md#know-the-bda-file-limits) note in the main README.
+
 ### Extension Matching Is Case-Sensitive
 
 Each extension in `bda-supported-file-types.json` becomes an [S3 event notification suffix filter](https://docs.aws.amazon.com/AmazonS3/latest/userguide/notification-how-to-filtering.html) on the input bucket. **S3 suffix filters match the object key exactly — they are case-sensitive and support no wildcards or regular expressions.** As a result, an extension listed in lowercase (e.g. `.jpg`) will **not** match an object uploaded with a differently-cased extension (e.g. `photo.JPG` or `photo.Jpg`); that upload is stored but never processed.

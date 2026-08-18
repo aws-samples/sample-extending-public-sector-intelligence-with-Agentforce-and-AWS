@@ -117,7 +117,7 @@ In the project's standard output configuration, check the summary/generative box
 
 For details on standard output and the generative fields available per modality, see the AWS documentation: [Standard output in Bedrock Data Automation](https://docs.aws.amazon.com/bedrock/latest/userguide/bda-standard-output.html).
 
-> **Custom output / blueprints (optional).** The event processor also records a `custom_output_path` when a project produces custom output via a blueprint, and prefers it over the standard path when present. Standard output with summaries is all that's required for this sample to work — custom blueprints are an optional enhancement if you want structured field extraction tailored to your document types. See [Custom output and blueprints](https://docs.aws.amazon.com/bedrock/latest/userguide/bda-custom-output-idp.html).
+> **Custom output / blueprints (optional, and not surfaced to Agentforce).** You can attach blueprints to your BDA project, and BDA **will** process them — the blueprint output is written to the output bucket and tracked in DynamoDB. **However, the MCP tools do not return blueprint results.** Agentforce responses come only from the standard-output summaries, so blueprint-extracted fields won't appear in Agentforce unless you extend the MCP tools to read them. See [Custom output and blueprints](https://docs.aws.amazon.com/bedrock/latest/userguide/bda-custom-output-idp.html).
 
 ### Step 3: Note the Stage
 
@@ -137,6 +137,14 @@ arn:aws:bedrock:us-east-1:123456789012:data-automation-project/abcdef123456
 Put this value in `cdk.context.json` under `deployment.bda-project-arn` in the next section. The stack validates at deploy time that this is a well-formed `arn:aws:bedrock:` ARN when `enable-bda` is `true`.
 
 > **Cross-region inference is handled for you.** The stack automatically selects the correct Bedrock Data Automation cross-region inference (CRIS) profile based on `deployment.region`, so you do not configure a profile manually. See [BDA Cross-Region Inference](cdk/README.md#bda-cross-region-inference) for the region-to-profile mapping.
+
+### Know the BDA File Limits
+
+Bedrock Data Automation enforces its own per-modality limits on file size, resolution/length, and supported formats. If an uploaded file exceeds them, `InvokeDataAutomationAsync` fails synchronously with a `ValidationException` (for example, *"File cannot be processed because it is too large"*) — the file is stored in S3 but never processed, and no BDA job is created.
+
+Note that triggering the pipeline is not the same as BDA accepting the file: `bda-supported-file-types.json` controls which extensions *invoke* processing, but BDA can still reject a triggered file whose format or size falls outside its supported range. Review the current limits and supported formats and keep your trigger list aligned with them.
+
+For the authoritative, up-to-date limits (they can change over time and by region), see the AWS documentation: [Prerequisites and limits for Bedrock Data Automation](https://docs.aws.amazon.com/bedrock/latest/userguide/bda-limits.html).
 
 ---
 
