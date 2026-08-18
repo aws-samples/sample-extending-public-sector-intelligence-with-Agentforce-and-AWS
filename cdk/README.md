@@ -22,11 +22,11 @@ Core infrastructure parameters for the BdaProcessingStack.
 | `input-bucket-name` | Yes | — | S3 bucket name for document input (see bucket creation notes below) |
 | `create-input-bucket` | No | `true` | Whether CDK creates a new bucket or references an existing one |
 | `output-bucket-name` | No | `""` | S3 bucket for BDA output (uses input bucket if empty) |
-| `create-output-bucket` | No | `true` | Whether CDK creates a new output bucket or references an existing one |
+| `create-output-bucket` | No | `false` | Whether CDK creates a new output bucket or references an existing one. Only applies when `output-bucket-name` is set and differs from the input bucket. (The shipped example config sets it to `true`.) |
 
 #### Bucket Creation Behavior
 
-`create-input-bucket` and `create-output-bucket` are both `true` by default. This controls whether CDK creates new S3 buckets or references existing ones:
+These flags control whether CDK creates new S3 buckets or references existing ones. Their code defaults differ: `create-input-bucket` defaults to `true` (CDK creates the input bucket), while `create-output-bucket` defaults to `false`. The shipped `cdk.context.example.json` sets **both** to `true`, so if you follow the Quick Start you get new buckets for both. Note that `create-output-bucket` only takes effect when `output-bucket-name` is set and differs from the input bucket name; otherwise BDA output goes to the input bucket.
 
 **When set to `true` (default):**
 - CDK creates a new S3 bucket with the name you provide.
@@ -46,7 +46,9 @@ Core infrastructure parameters for the BdaProcessingStack.
 | `environment` | No | `dev` | `dev`, `staging`, or `prod` — controls log retention and log levels |
 | `region` | No | `us-east-1` | AWS region for deployment |
 | `s3-trigger-prefix` | No | `__sfdcroot__/` | S3 key prefix that triggers BDA processing on upload |
-| `removal-policy` | No | `retain` | Removal policy for S3 buckets and DynamoDB tables: `retain` (keep data on stack deletion) or `destroy` (delete them). See [Removal Policy](#removal-policy). |
+| `dynamodb-table-name` | No | `{input-bucket-name}-{environment}-documents` | Name of the DynamoDB table storing document metadata and BDA insights |
+| `dynamodb-counter-table-name` | No | `{input-bucket-name}-{environment}-counters` | Name of the DynamoDB table used for document ID counters |
+| `removal-policy` | No | `destroy` in the example config (`retain` if the key is omitted) | Removal policy for S3 buckets and DynamoDB tables: `retain` (keep data on stack deletion) or `destroy` (delete them). See [Removal Policy](#removal-policy). |
 
 ### `lambda` (optional)
 
@@ -110,7 +112,8 @@ Configuration for the AgentCore MCP Gateway and semantic search tools.
 |-----|---------|-------------|
 | `knowledge-base-id` | `""` | Amazon Bedrock Knowledge Base ID for `semantic_search` tool |
 | `enable-semantic-search` | `false` | Enable the `semantic_search` tool (requires `knowledge-base-id`) |
-| `dynamodb-table-name` | `{input-bucket-name}-{environment}-documents` | DynamoDB table name for document queries |
+
+> The DynamoDB table the MCP Gateway queries is set by [`deployment.dynamodb-table-name`](#deployment-required), not by an `mcp` key.
 
 ---
 
@@ -145,6 +148,18 @@ PROCESSED_FILE_TYPES = [".pdf", ".png", ".mp4"]
 
 Only files matching these extensions will trigger BDA processing when uploaded to the S3 trigger prefix path. Other files are stored but not processed.
 
+### Extension Matching Is Case-Sensitive
+
+Each extension in `bda-supported-file-types.json` becomes an [S3 event notification suffix filter](https://docs.aws.amazon.com/AmazonS3/latest/userguide/notification-how-to-filtering.html) on the input bucket. **S3 suffix filters match the object key exactly — they are case-sensitive and support no wildcards or regular expressions.** As a result, an extension listed in lowercase (e.g. `.jpg`) will **not** match an object uploaded with a differently-cased extension (e.g. `photo.JPG` or `photo.Jpg`); that upload is stored but never processed.
+
+This sample ships the extensions in lowercase and does not normalize casing on your behalf, because the right approach depends on your environment and the tradeoffs it implies (for example, S3 allows at most 100 event notification configurations per bucket, so registering additional casings consumes that budget). Choose the option that best fits your integration:
+
+- **Normalize casing before upload (recommended when you control the uploader).** Have the client that writes to S3 — for example, the Salesforce connector or an upload pipeline — lowercase the file extension (or the whole key) before the `PutObject`. This keeps the trigger configuration small and matching predictable, with no extra AWS resources.
+- **Register the casings you need to support.** Add the specific cased variants (e.g. both `.jpg` and `.JPG`) to `bda-supported-file-types.json`. Each variant you add creates an additional S3 notification filter, so keep the per-bucket 100-configuration limit in mind, and note that enumerating every mixed-case permutation is impractical.
+- **Do your own validation in a Lambda function.** Remove the per-extension suffix filters and instead trigger the ingestion Lambda on all `OBJECT_CREATED` events under the trigger prefix, then perform a single case-insensitive extension check inside the function (e.g. compare `os.path.splitext(key)[1].lower()` against your allowed list). This scales to any number of extensions and casings without consuming notification configurations, at the cost of invoking the Lambda for objects that may ultimately be skipped.
+
+Pick whichever approach matches how files arrive in your bucket and how much AWS-side configuration you want to own.
+
 ---
 
 ## Environment-Specific Behavior
@@ -159,30 +174,38 @@ Only files matching these extensions will trigger BDA processing when uploaded t
 - **Debug Logging**: Disabled
 - **S3 Log Lifecycle**: Transitioned to IA after 30 days, deleted after 90 days
 
-> The removal policy for stateful resources (S3 buckets and DynamoDB tables) is controlled by [`deployment.removal-policy`](#removal-policy), not by `environment`. It defaults to `retain` in every environment.
+> The removal policy for stateful resources (S3 buckets and DynamoDB tables) is controlled by [`deployment.removal-policy`](#removal-policy), not by `environment`. The shipped example config sets it to `destroy` in every environment; if the key is omitted, the code falls back to `retain`.
 
 ---
 
 ## Removal Policy
 
-The `deployment.removal-policy` context value controls what happens to the **S3 buckets and DynamoDB tables** (input bucket, output bucket, logging bucket, document table, counter table) when the stack is deleted. It applies to all environments and defaults to `retain`.
+The `deployment.removal-policy` context value controls what happens to the **S3 buckets and DynamoDB tables** (input bucket, output bucket, logging bucket, document table, counter table) when the stack is deleted. It applies to all environments.
+
+**The shipped `cdk.context.example.json` sets this to `destroy`**, so if you follow the Quick Start (copy the example file), teardown is easy — `cdk destroy` removes everything and leaves nothing behind. If the key is omitted entirely, the code falls back to `retain`.
 
 | Value | Behavior |
 |-------|----------|
-| `retain` (default) | Buckets and tables are **preserved** on stack deletion. Data is never lost to a `cdk destroy`. |
-| `destroy` | Buckets and tables are **deleted** on stack deletion. Created buckets also get `auto_delete_objects` enabled so non-empty buckets can be removed. |
+| `destroy` (value in the example config) | Buckets and tables are **deleted** on stack deletion. Created buckets also get `auto_delete_objects` enabled so non-empty buckets can be removed. |
+| `retain` (code fallback when the key is absent) | Buckets and tables are **preserved** on stack deletion. Data is never lost to a `cdk destroy`. |
 
-```json
-"deployment": {
-  "removal-policy": "destroy"
-}
-```
+### Switching to `retain`
+
+To keep your stateful resources on stack deletion, do **either** of the following in `cdk.context.json`:
+
+- Set the value explicitly:
+  ```json
+  "deployment": {
+    "removal-policy": "retain"
+  }
+  ```
+- **Or** simply delete the `removal-policy` line — with the key absent, the stack defaults to `retain`.
 
 **When to use `destroy`**
 
 Use it for disposable, non-production environments (ephemeral dev/test, CI, demos) where you want `cdk destroy` to clean up everything and leave nothing behind. This also avoids the retained-resource collisions described in [Troubleshooting Deployment](#troubleshooting-deployment).
 
-> ⚠️ **Data-loss warning.** With `destroy`, deleting the stack permanently deletes the buckets (and all objects, including versioned copies) and the DynamoDB tables (and their point-in-time-recovery history). This system is designed to handle regulated case data, so **keep `retain` for staging and production.** Only set `destroy` in environments where losing the stored data on teardown is acceptable and approved. Note that `destroy` only takes effect on a future stack deletion — it does not delete anything on a normal `cdk deploy`.
+> ⚠️ **Data-loss warning.** With `destroy`, deleting the stack permanently deletes the buckets (and all objects, including versioned copies) and the DynamoDB tables (and their point-in-time-recovery history). Because the shipped example config sets `destroy`, this is the behavior you inherit by default. This system is designed to handle regulated case data, so for staging and production you should **switch to `retain`** (see [Switching to `retain`](#switching-to-retain)). Only keep `destroy` in environments where losing the stored data on teardown is acceptable and approved. Note that `destroy` only takes effect on a future stack deletion — it does not delete anything on a normal `cdk deploy`.
 
 **Notes**
 
@@ -266,7 +289,10 @@ Both DynamoDB tables (`DocumentTable`, `CounterTable`) have **PITR enabled**. PI
     "bda-stage": "LIVE",
     "environment": "dev",
     "region": "us-east-1",
-    "s3-trigger-prefix": "__sfdcroot__/"
+    "s3-trigger-prefix": "__sfdcroot__/",
+    "dynamodb-table-name": "sample-bda-documents",
+    "dynamodb-counter-table-name": "sample-bda-counters",
+    "removal-policy": "destroy"
   },
   "lambda": {
     "memory-size": 1024,
@@ -346,7 +372,7 @@ After redeployment, the `semantic_search` tool will be registered with the Agent
 The stack automatically validates at deploy time:
 - `input-bucket-name` is at least 3 characters
 - `bda-project-arn` is a valid `arn:aws:bedrock:` ARN (when `enable-bda` is true)
-- All `processed-file-types` start with a dot (e.g., `.pdf`)
+- Every file extension loaded from `bda-supported-file-types.json` starts with a dot (e.g., `.pdf`)
 - At least one file type is configured for processing
 
 ---
@@ -359,7 +385,7 @@ When you run `cdk deploy`, the change set fails early validation with one or mor
 
 **Why this happens**
 
-These resources are created with **fixed physical names** (from `input-bucket-name`, `output-bucket-name`, `dynamodb-table-name`, and the derived `-logs` / `-counters` names) and use a `retain` [removal policy](#removal-policy) by default. Retain means that when the stack is deleted, the buckets and DynamoDB tables are **kept**, not destroyed. On the next deploy, CloudFormation tries to *create* them again, but a resource with that exact name already exists — so it refuses. The same error occurs if the resource was created outside this stack (for example, manually or by another stack).
+These resources are created with **fixed physical names** (from `input-bucket-name`, `output-bucket-name`, `dynamodb-table-name`, and the derived `-logs` / `-counters` names). When the [removal policy](#removal-policy) is `retain` (the code fallback used when you remove the line, or when you set it explicitly), deleting the stack **keeps** the buckets and DynamoDB tables rather than destroying them. On the next deploy, CloudFormation tries to *create* them again, but a resource with that exact name already exists — so it refuses. The same error occurs if the resource was created outside this stack (for example, manually or by another stack), or if a prior `destroy`-policy deploy left resources behind because the stack deletion did not complete.
 
 **Which resources are affected**
 

@@ -36,6 +36,8 @@ This project extends the pattern established in [Modernizing evidence management
 | 7 | The Lambda function queries DynamoDB to locate document records, then retrieves results from S3 |
 | 8 | Results are returned to Agentforce and loaded into the agent's context for a natural language response |
 
+> **Note — file extensions are matched case-sensitively.** Processing is triggered by S3 event notification suffix filters, which match object keys exactly (no wildcards, case-sensitive). An extension configured as `.jpg` will not match an upload named `photo.JPG`, so that file is stored but never processed. This sample ships extensions in lowercase and does not normalize casing for you; you can normalize the extension before upload, register the specific cased variants, or validate case-insensitively in the ingestion Lambda. See [cdk/README.md](cdk/README.md#extension-matching-is-case-sensitive) for the options and their tradeoffs.
+
 ---
 
 ## Stacks Deployed
@@ -81,8 +83,60 @@ Additionally, ensure you have:
 - **AWS CDK v2** installed globally (`npm install -g aws-cdk`)
 - **Node.js 18+** (required by CDK CLI)
 - **Python 3.9+** with `pip`
-- **An Amazon Bedrock Data Automation project** created in the AWS Console
+- **An Amazon Bedrock Data Automation project** created in the AWS Console — see [Set Up an Amazon Bedrock Data Automation Project](#set-up-an-amazon-bedrock-data-automation-project) below for step-by-step instructions
 - Your **AWS Account ID** and target **region**
+
+---
+
+## Set Up an Amazon Bedrock Data Automation Project
+
+Amazon Bedrock Data Automation (BDA) is the AI service that processes uploaded evidence — extracting text, generating summaries, and transcribing audio/video. This sample does **not** create the BDA project for you; you create it once in the AWS Console (or via API) and pass its ARN to the CDK stack through `deployment.bda-project-arn`. Do this before deploying.
+
+> If you set `features.enable-bda` to `false`, the stack skips all BDA wiring and you can ignore this section. In that mode, files are stored and tracked in DynamoDB but not processed.
+
+### Step 1: Create the Project
+
+1. Open the [Amazon Bedrock console](https://console.aws.amazon.com/bedrock/) in the **same region** you will deploy the stack to (the region in `deployment.region`). BDA is region-specific, and the project ARN must live in your deployment region.
+2. In the left navigation, go to **Data Automation → Projects**, then choose **Create project**.
+3. Give the project a name (for example, `evidence-processing-dev`) and create it.
+
+### Step 2: Enable Summaries in the Project's Standard Output
+
+This sample reads BDA's **standard output** and expects a natural-language **summary** for each media type. If a modality has no summary enabled, documents of that type produce no useful result for Agentforce.
+
+In the project's standard output configuration, check the summary/generative box for each modality you plan to ingest. The console groups these under each media type:
+
+| Modality | Checkbox to enable |
+|----------|--------------------|
+| Documents | **Generative Fields → Enable** (generates the document description and document summary; also captions diagrams, charts, and images when element granularity is on) |
+| Images | **Generative: Image summarization** (a summary of the image) |
+| Video | **Generative: Video summarization** (a summary of the entire video) |
+| Audio | **Generative: Audio summary** (a summary of the entire audio) |
+
+**You do not need to enable every modality** — only check the boxes for the ones you actually plan to ingest. Enable a modality only if its file types appear in `cdk/bda-supported-file-types.json`. For example, if you only process documents and images, enable just those two and leave video and audio off. If you narrow the processed file types (see [cdk/README.md](cdk/README.md#supported-file-types)), keep only the matching modalities enabled.
+
+For details on standard output and the generative fields available per modality, see the AWS documentation: [Standard output in Bedrock Data Automation](https://docs.aws.amazon.com/bedrock/latest/userguide/bda-standard-output.html).
+
+> **Custom output / blueprints (optional).** The event processor also records a `custom_output_path` when a project produces custom output via a blueprint, and prefers it over the standard path when present. Standard output with summaries is all that's required for this sample to work — custom blueprints are an optional enhancement if you want structured field extraction tailored to your document types. See [Custom output and blueprints](https://docs.aws.amazon.com/bedrock/latest/userguide/bda-custom-output-idp.html).
+
+### Step 3: Note the Stage
+
+BDA projects have a **DRAFT** and a **LIVE** stage. Configuration changes land in DRAFT; you promote them to LIVE to serve production traffic. Set `deployment.bda-stage` to match the stage you want the stack to invoke:
+
+- `LIVE` (default) — use the promoted, stable configuration.
+- `DRAFT` — use the in-progress configuration while you iterate on project settings.
+
+### Step 4: Copy the Project ARN
+
+Open the project's detail page and copy its ARN. It looks like:
+
+```
+arn:aws:bedrock:us-east-1:123456789012:data-automation-project/abcdef123456
+```
+
+Put this value in `cdk.context.json` under `deployment.bda-project-arn` in the next section. The stack validates at deploy time that this is a well-formed `arn:aws:bedrock:` ARN when `enable-bda` is `true`.
+
+> **Cross-region inference is handled for you.** The stack automatically selects the correct Bedrock Data Automation cross-region inference (CRIS) profile based on `deployment.region`, so you do not configure a profile manually. See [BDA Cross-Region Inference](cdk/README.md#bda-cross-region-inference) for the region-to-profile mapping.
 
 ---
 
@@ -127,7 +181,10 @@ Open `cdk.context.json` and fill in the **required** values for your environment
     "bda-stage": "LIVE",
     "environment": "dev",
     "region": "us-east-1",
-    "s3-trigger-prefix": "__sfdcroot__/"
+    "s3-trigger-prefix": "__sfdcroot__/",
+    "dynamodb-table-name": "sample-bda-documents",
+    "dynamodb-counter-table-name": "sample-bda-counters",
+    "removal-policy": "destroy"
   }
 }
 ```
@@ -139,7 +196,7 @@ Open `cdk.context.json` and fill in the **required** values for your environment
 | `bda-project-arn` | AWS Console → Amazon Bedrock → Data Automation → Your Project → ARN |
 | `region` | The region where your BDA project lives |
 
-> **Bucket creation notes:** `create-input-bucket` and `create-output-bucket` default to `true`, meaning CDK will create new buckets with all required policies, encryption, and CORS configured automatically. The bucket names you provide must be globally unique across all AWS accounts. If you set either to `false`, you are referencing an existing bucket — CDK will not modify its policies or CORS. You will need to manually configure CORS permissions and ensure the Lambda roles have the required S3 access. See [cdk/README.md](cdk/README.md) for details on bucket creation behavior.
+> **Bucket creation notes:** The example config sets `create-input-bucket` and `create-output-bucket` to `true`, so CDK creates new buckets with all required policies, encryption, and CORS configured automatically. (If you omit these keys, `create-input-bucket` defaults to `true` but `create-output-bucket` defaults to `false`.) The bucket names you provide must be globally unique across all AWS accounts. If you set either to `false`, you are referencing an existing bucket — CDK will not modify its policies or CORS. You will need to manually configure CORS permissions and ensure the Lambda roles have the required S3 access. See [cdk/README.md](cdk/README.md#bucket-creation-behavior) for details on bucket creation behavior.
 
 For the full configuration reference (optional fields, feature flags, MCP settings), see [cdk/README.md](cdk/README.md).
 
@@ -196,7 +253,11 @@ For step-by-step instructions on registering the MCP server in Salesforce, confi
 
 ## Clean Up the CDK Stacks
 
-When you no longer need this sample, use `cdk destroy` to tear down the deployed infrastructure. This deletes the CloudFormation stacks and all resources managed by them (Lambda functions, IAM roles, EventBridge rules, Step Functions, etc.). Stateful resources with `RETAIN` removal policies (S3 buckets, DynamoDB tables, Cognito user pools) are preserved and must be removed separately — see [Retained Resources](#retained-resources) below.
+When you no longer need this sample, use `cdk destroy` to tear down the deployed infrastructure. This deletes the CloudFormation stacks and the resources managed by them (Lambda functions, IAM roles, EventBridge rules, Step Functions, etc.).
+
+**What happens to the stateful resources depends on your `removal-policy`.** The shipped `cdk.context.example.json` sets `deployment.removal-policy` to `destroy`, so if you followed the Quick Start, `cdk destroy` also removes the S3 buckets (input, output, and logging) and the DynamoDB tables (documents and counters) — no manual cleanup needed. The Cognito user pool and the Lambda/Step Functions CloudWatch log groups are always deleted with the stack regardless of this setting.
+
+If you changed `removal-policy` to `retain` (or removed the line, which falls back to `retain`), those S3 buckets and DynamoDB tables are **preserved** on `cdk destroy` and must be removed separately — see [Retained Resources](#retained-resources) below.
 
 ```bash
 cd cdk
@@ -213,7 +274,7 @@ Alternatively, you can delete the stacks directly from the AWS Console:
 
 ### Retained Resources
 
-The stacks use `RETAIN` removal policies on stateful resources. After `cdk destroy`, manually delete these via the AWS Console if no longer needed:
+This section applies **only if you deployed with `removal-policy: retain`** (either set explicitly or by omitting the `removal-policy` line). With the example config's `destroy` policy, these S3 buckets and DynamoDB tables are removed automatically by `cdk destroy` and you can skip this section. When the policy is `retain`, delete them manually via the AWS Console after `cdk destroy` if no longer needed:
 
 **S3 Buckets:**
 1. Open the [Amazon S3 console](https://console.aws.amazon.com/s3/)
@@ -224,21 +285,9 @@ The stacks use `RETAIN` removal policies on stateful resources. After `cdk destr
 1. Open the [DynamoDB console](https://console.aws.amazon.com/dynamodb/)
 2. Navigate to **Tables** and delete: `YOUR-INPUT-BUCKET-dev-documents` and `YOUR-INPUT-BUCKET-dev-counters`
 
-**Cognito User Pool:**
-1. Open the [Amazon Cognito console](https://console.aws.amazon.com/cognito/)
-2. Navigate to **User Pools**, select the pool created by the stack, and choose **Delete**
+**Salesforce:** Regardless of removal policy, remove the Agentforce MCP connection from **Setup > Agentforce Registry** — it lives in Salesforce and is not managed by CDK.
 
-**CloudWatch Log Groups:**
-1. Open the [CloudWatch console](https://console.aws.amazon.com/cloudwatch/)
-2. Navigate to **Logs > Log groups** and delete the following:
-   - `/aws/lambda/InvokeBDAProject-dev`
-   - `/aws/lambda/BDAEventProcessor-dev`
-   - `/aws/lambda/McpTools-dev`
-   - `/aws/lambda/SfdcQueryProcessor-dev`
-   - `/aws/lambda/SfdcDocProcessor-dev`
-   - `/aws/stepfunctions/SfdcQuery-dev`
-
-**Salesforce:** Remove the Agentforce MCP connection from **Setup > Agentforce Registry**.
+> The Cognito user pool and the Lambda/Step Functions CloudWatch log groups use a `destroy` removal policy in code, so they are deleted with the stack automatically and are not listed above.
 
 > Because this is an event-driven, serverless architecture, you only pay for what you use. Processing costs are incurred only when evidence is actively uploaded and analyzed.
 
